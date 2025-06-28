@@ -15,6 +15,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
+# Purge pip cache and print requirements.txt content for debugging
+RUN pip cache purge
+RUN echo "--- Contents of requirements.txt ---" && \
+    cat requirements.txt && \
+    echo "------------------------------------"
+
 # Install Python dependencies
 # Using --no-cache-dir to reduce image size
 # Using --extra-index-url for PyTorch if needed, but torch is pinned in requirements.txt
