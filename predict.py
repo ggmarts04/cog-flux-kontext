@@ -64,21 +64,11 @@ class FluxDevKontextPredictor(BasePredictor):
 
         # Initialize safety checker
         self.safety_checker = SafetyChecker()
-        print("Compiling model with torch.compile...")
-        start_time = time.time()
-        self.predict(
-            prompt="Make the hair blue",
-            input_image=Path("lady.png"),
-            aspect_ratio="1:1",
-            num_inference_steps=30,
-            guidance=2.5,
-            seed=42,
-            output_format="png",
-            output_quality=100,
-            disable_safety_checker=True,
-            go_fast=True,
-        )
-        print(f"Compiled in {time.time() - start_time} seconds")
+        print("Model setup complete. The model was compiled with torch.compile earlier.")
+        # Removed the warm-up self.predict() call as it expects a local Path
+        # and the primary predict function now uses input_image_url.
+        # The core model (self.model) is already compiled by torch.compile.
+        # The full pipeline JIT for a specific input will happen on the first actual call.
         print("FluxDevKontextPredictor setup complete")
 
 

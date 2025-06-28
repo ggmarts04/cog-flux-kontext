@@ -1,5 +1,5 @@
 # Base image from RunPod with PyTorch, Python 3.11, and CUDA 12.1.1
-FROM runpod/pytorch:2.3.0-py3.11-cuda12.1.1-devel-ubuntu22.04
+FROM runpod/pytorch:2.2.1-py3.11-cuda12.1.1-devel-ubuntu22.04
 
 # Set the working directory
 WORKDIR /app
