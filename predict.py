@@ -2,7 +2,9 @@ import os
 import time
 import torch
 from PIL import Image
-from cog import BasePredictor, Path, Input
+from cog import BasePredictor, Path, Input # Path will still be used for output, Input not directly by RunPod handler
+import requests
+import tempfile # For managing temporary image files
 
 from flux.sampling import denoise, get_schedule, prepare_kontext, unpack
 from flux.util import (
@@ -82,78 +84,63 @@ class FluxDevKontextPredictor(BasePredictor):
 
     def predict(
         self,
-        prompt: str = Input(
-            description="Text description of what you want to generate, or the instruction on how to edit the given image.",
-        ),
-        input_image: Path = Input(
-            description="Image to use as reference. Must be jpeg, png, gif, or webp.",
-        ),
-        aspect_ratio: str = Input(
-            description="Aspect ratio of the generated image. Use 'match_input_image' to match the aspect ratio of the input image.",
-            choices=list(ASPECT_RATIOS.keys()),
-            default="match_input_image",
-        ),
-        # megapixels: str = Input(
-        #     description="Approximate number of megapixels for generated image",
-        #     choices=["1", "0.25"],
-        #     default="1",
-        # ),
-        num_inference_steps: int = Input(
-            description="Number of inference steps", default=28, ge=4, le=50
-        ),
-        guidance: float = Input(
-            description="Guidance scale for generation", default=2.5, ge=0.0, le=10.0
-        ),
-        seed: int = Input(
-            description="Random seed for reproducible generation. Leave blank for random.",
-            default=None,
-        ),
-        output_format: str = Input(
-            description="Output image format",
-            choices=["webp", "jpg", "png"],
-            default="webp",
-        ),
-        output_quality: int = Input(
-            description="Quality when saving the output images, from 0 to 100. 100 is best quality, 0 is lowest quality. Not relevant for .png outputs",
-            default=80,
-            ge=0,
-            le=100,
-        ),
-        disable_safety_checker: bool = Input(
-            description="Disable NSFW safety checker", default=False
-        ),
-        go_fast: bool = Input(
-            description="Make the model go fast, output quality may be slightly degraded for more difficult prompts",
-            default=True,
-        ),
-    ) -> Path:
+        prompt: str,
+        input_image_url: str, # Changed from input_image: Path
+        aspect_ratio: str = "match_input_image",
+        # megapixels: str = "1", # Commented out as in original
+        num_inference_steps: int = 28,
+        guidance: float = 2.5,
+        seed: int = None,
+        output_format: str = "webp",
+        output_quality: int = 80,
+        disable_safety_checker: bool = False,
+        go_fast: bool = True,
+    ) -> Path: # Still returns Path, RunPod handler will deal with it
         """
-        Generate an image based on the text prompt and conditioning image using FLUX.1 Kontext
+        Generate an image based on the text prompt and conditioning image URL using FLUX.1 Kontext
         """
-        with torch.inference_mode(), print_timing("generate image"):
-            seed = prepare_seed(seed)
+        temp_image_file = None
+        try:
+            with torch.inference_mode(), print_timing("generate image"):
+                seed = prepare_seed(seed)
 
-            if aspect_ratio == "match_input_image":
-                target_width, target_height = None, None
-            else:
-                target_width, target_height = ASPECT_RATIOS[aspect_ratio]
+                # Download image from URL
+                print(f"Downloading image from URL: {input_image_url}")
+                response = requests.get(input_image_url, stream=True)
+                response.raise_for_status() # Raise an exception for bad status codes
 
-            # Prepare input for kontext sampling
-            inp, final_height, final_width = prepare_kontext(
-                t5=self.t5,
-                clip=self.clip,
-                prompt=prompt,
-                ae=self.ae,
-                img_cond_path=str(input_image),
-                target_width=target_width,
-                target_height=target_height,
-                bs=1,
-                seed=seed,
-                device=self.device,
-            )
+                # Save to a temporary file
+                # Create a named temporary file, ensuring it has an extension PIL can use.
+                # The file will be deleted when closed.
+                suffix = os.path.splitext(input_image_url)[1] or '.jpg' # Default to .jpg if no extension
+                temp_image_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                for chunk in response.iter_content(chunk_size=8192):
+                    temp_image_file.write(chunk)
+                temp_image_file.close() # Close the file so PIL can open it
+
+                print(f"Image downloaded and saved to temporary file: {temp_image_file.name}")
+
+                if aspect_ratio == "match_input_image":
+                    target_width, target_height = None, None
+                else:
+                    target_width, target_height = ASPECT_RATIOS[aspect_ratio]
+
+                # Prepare input for kontext sampling using the downloaded image path
+                inp, final_height, final_width = prepare_kontext(
+                    t5=self.t5,
+                    clip=self.clip,
+                    prompt=prompt,
+                    ae=self.ae,
+                    img_cond_path=temp_image_file.name, # Use path of the temporary file
+                    target_width=target_width,
+                    target_height=target_height,
+                    bs=1,
+                    seed=seed,
+                    device=self.device,
+                )
             
-            if go_fast:
-                compute_step_map = generate_compute_step_map("go really fast", num_inference_steps)
+                if go_fast:
+                    compute_step_map = generate_compute_step_map("go really fast", num_inference_steps)
             else:
                 compute_step_map = generate_compute_step_map("none", num_inference_steps)
 
@@ -205,6 +192,11 @@ class FluxDevKontextPredictor(BasePredictor):
 
             # Return the output path
             return Path(output_path)
+        finally:
+            # Clean up the temporary image file
+            if temp_image_file and os.path.exists(temp_image_file.name):
+                print(f"Cleaning up temporary file: {temp_image_file.name}")
+                os.remove(temp_image_file.name)
 
 
 def download_model_weights():
